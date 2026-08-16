@@ -23,6 +23,7 @@ DTS=	\
 	rockchip/rk3566-radxa-zero-3e.dts \
 	rockchip/rk3566-radxa-zero-3w.dts \
 	rockchip/rk3568-bpi-r2-pro.dts \
+	rockchip/rk3568-e4ap5g1-itx.dts \
 	rockchip/rk3588-rock-5-itx.dts \
 	rockchip/rk3588-rock-5b.dts \
 	rockchip/rk3588-orangepi-5-plus.dts \

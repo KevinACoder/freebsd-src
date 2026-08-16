@@ -1,0 +1,409 @@
+// SPDX-License-Identifier: GPL-2.0-or-later OR MIT
+/*
+ * Indium Engine RK3568-E4AP5G1-ITX board (FreeBSD port).
+ *
+ * Sourced from the U-Boot tree board DTS (arch/arm/dts/rk3568-e4ap5g1-itx.dts,
+ * commits 696e450..124b610), retargeted against the FreeBSD device-tree
+ * snapshot (rk3568.dtsi -> rk356x-base.dtsi -> rk3568-pinctrl.dtsi).
+ *
+ * Port notes (label/prop drift vs the U-Boot tree, keep in sync upstream):
+ *  - combphy0_us/combphy1_usq/combphy2_psq  ->  combphy0/combphy1/combphy2
+ *  - usbdrd30 + usbdrd_dwc3                  ->  usb_host0_xhci (fcc00000)
+ *  - usbhost30 + usbhost_dwc3                ->  usb_host1_xhci (fd000000)
+ *  - u2phy0_host / u2phy0_otg                ->  usb2phy0_host / usb2phy0_otg
+ *  - rgmii_phy1 was defined in rk3568-u-boot.dtsi (U-Boot fragment) only;
+ *    the kernel dts must carry it, so it is defined under &mdio1 here.
+ *  - The snapshot rk356x-base.dtsi already carries xin24m/xin32k fixed clocks;
+ *    FreeBSD's clk framework panics on missing parents (clk_rtc_32k_mux/xin32k),
+ *    which is why the U-Boot-tree dtb cannot boot FreeBSD.
+ *  - pcie3x2 clocks/clock-names identical to snapshot -> override dropped.
+ *  - sata2 stays disabled: combphy2 is kept for pcie2x1.
+ *  - SD is the boot medium (U-Boot lives at SD LBA 0x4000): never write it.
+ */
+
+/dts-v1/;
+#include <dt-bindings/gpio/gpio.h>
+#include <dt-bindings/pinctrl/rockchip.h>
+#include "rk3568.dtsi"
+
+/ {
+	model = "Indium Engine RK3568-E4AP5G1-ITX";
+	compatible = "rockchip,rk3568-e4ap5g1-itx", "rockchip,rk3568";
+
+	aliases {
+		ethernet0 = &gmac0;
+		ethernet1 = &gmac1;
+		mmc0 = &sdmmc0;
+		mmc1 = &sdhci;
+	};
+
+	chosen {
+		stdout-path = "serial2:115200n8";
+	};
+
+	/*
+	 * The board rails are already enabled by the SPI-resident SPL/PMIC.
+	 * Fixed regulators model their voltages without changing board power
+	 * sequencing.
+	 */
+	vcc_3v3: regulator-3v3 {
+		compatible = "regulator-fixed";
+		regulator-name = "vcc_3v3";
+		regulator-min-microvolt = <3300000>;
+		regulator-max-microvolt = <3300000>;
+		regulator-always-on;
+		regulator-boot-on;
+	};
+
+	vcc_1v8: regulator-1v8 {
+		compatible = "regulator-fixed";
+		regulator-name = "vcc_1v8";
+		regulator-min-microvolt = <1800000>;
+		regulator-max-microvolt = <1800000>;
+		regulator-always-on;
+		regulator-boot-on;
+	};
+
+	vcc3v3_mb: regulator-3v3-mb {
+		compatible = "regulator-fixed";
+		regulator-name = "vcc3v3_mb";
+		regulator-min-microvolt = <3300000>;
+		regulator-max-microvolt = <3300000>;
+		regulator-always-on;
+		regulator-boot-on;
+		vin-supply = <&vcc_3v3>;
+	};
+
+	/* OTG VBUS switch, matching the standard-board vendor DTS. */
+	vcc5v0_usb3: regulator-5v0-usb3-vbus {
+		compatible = "regulator-fixed";
+		regulator-name = "vcc5v0_usb3";
+		regulator-min-microvolt = <5000000>;
+		regulator-max-microvolt = <5000000>;
+		enable-active-high;
+		gpios = <&gpio3 RK_PA1 GPIO_ACTIVE_HIGH>;
+		pinctrl-names = "default";
+		pinctrl-0 = <&usb3_vbus_en>;
+	};
+
+	/* USB2 host VBUS switch (CH334P hub ports / USB3 Host1 port). */
+	vcc5v0_usb2: regulator-5v0-usb2-vbus {
+		compatible = "regulator-fixed";
+		regulator-name = "vcc5v0_usb2";
+		regulator-min-microvolt = <5000000>;
+		regulator-max-microvolt = <5000000>;
+		enable-active-high;
+		gpios = <&gpio3 RK_PA0 GPIO_ACTIVE_HIGH>;
+		pinctrl-names = "default";
+		pinctrl-0 = <&usb2_vbus_en>;
+	};
+
+	/*
+	 * The schematic selects SATA with SEL=0.  MPHY0 carries the external
+	 * SATA0/USB3 shared lane; MPHY1 carries the M.2 2280 SATA lane.
+	 */
+	multiphy_mux_sel0: regulator-multiphy-sel0 {
+		compatible = "regulator-fixed";
+		regulator-name = "multiphy_mux_sel0";
+		enable-active-low;
+		gpio = <&gpio0 RK_PA5 GPIO_ACTIVE_LOW>;
+		regulator-always-on;
+		regulator-boot-on;
+	};
+
+	multiphy_mux_sel1: regulator-multiphy-sel1 {
+		compatible = "regulator-fixed";
+		regulator-name = "multiphy_mux_sel1";
+		enable-active-low;
+		gpio = <&gpio0 RK_PA6 GPIO_ACTIVE_LOW>;
+		regulator-always-on;
+		regulator-boot-on;
+	};
+};
+
+&pinctrl {
+	usb {
+		usb3_vbus_en: usb3-vbus-en {
+			rockchip,pins = <3 RK_PA1 RK_FUNC_GPIO &pcfg_pull_down>;
+		};
+
+		usb2_vbus_en: usb2-vbus-en {
+			rockchip,pins = <3 RK_PA0 RK_FUNC_GPIO &pcfg_pull_down>;
+		};
+	};
+
+	pcie {
+		pcie30x2_pins: pcie30x2-pins {
+			rockchip,pins =
+				/* pcie30x2_clkreqnm1 */
+				<2 RK_PD4 4 &pcfg_pull_up>,
+				/* pcie30x2_perstn - GPIO mode for software */
+				/* PERST# control */
+				<2 RK_PD6 RK_FUNC_GPIO &pcfg_pull_up>,
+				/* pcie30x2_wakenm1 */
+				<2 RK_PD5 4 &pcfg_pull_up>;
+		};
+	};
+
+	pcie20 {
+		pcie20x1_pins: pcie20x1-pins {
+			rockchip,pins =
+				/* pcie20x1_clkreqnm0 */
+				<2 RK_PD0 4 &pcfg_pull_up>,
+				/* pcie20x1_perstn - GPIO mode for software */
+				/* PERST# control */
+				<3 RK_PC1 RK_FUNC_GPIO &pcfg_pull_up>,
+				/* pcie20x1_wakenm0 */
+				<2 RK_PD1 4 &pcfg_pull_up>;
+		};
+	};
+};
+
+&pmu_io_domains {
+	pmuio1-supply = <&vcc_3v3>;
+	pmuio2-supply = <&vcc_3v3>;
+	vccio1-supply = <&vcc_3v3>;
+	vccio2-supply = <&vcc_1v8>;
+	vccio3-supply = <&vcc_3v3>;
+	vccio4-supply = <&vcc_3v3>;
+	vccio5-supply = <&vcc_3v3>;
+	vccio6-supply = <&vcc_3v3>;
+	vccio7-supply = <&vcc_3v3>;
+	status = "okay";
+};
+
+&uart2 {
+	status = "okay";
+};
+
+&sdmmc0 {
+	bus-width = <4>;
+	cap-mmc-highspeed;
+	cap-sd-highspeed;
+	disable-wp;
+	max-frequency = <150000000>;
+	no-1-8-v;
+	pinctrl-names = "default";
+	pinctrl-0 = <&sdmmc0_bus4 &sdmmc0_clk &sdmmc0_cmd &sdmmc0_det>;
+	vmmc-supply = <&vcc_3v3>;
+	vqmmc-supply = <&vcc_3v3>;
+	status = "okay";
+};
+
+&sdhci {
+	bus-width = <8>;
+	cap-mmc-highspeed;
+	max-frequency = <52000000>;
+	non-removable;
+	no-sd;
+	no-sdio;
+	full-pwr-cycle-in-suspend;
+	pinctrl-names = "default";
+	pinctrl-0 = <&emmc_bus8 &emmc_clk &emmc_cmd &emmc_datastrobe &emmc_rstnout>;
+	vmmc-supply = <&vcc_3v3>;
+	vqmmc-supply = <&vcc_1v8>;
+	status = "okay";
+};
+
+&usb2phy0 {
+	status = "okay";
+};
+
+&usb2phy0_host {
+	/*
+	 * USB2 PHY of the USB3 Host1 port (below the OTG connector).
+	 * VBUS comes from the vcc5v0_usb3 switch (GPIO3_A1): the USB1
+	 * connector dual-port VBUS is fed by USB3_VBUS_EN (schematic p28);
+	 * vcc5v0_usb2 (GPIO3_A0) only powers the CH334P hub ports.
+	 */
+	phy-supply = <&vcc5v0_usb3>;
+	status = "okay";
+};
+
+&usb2phy0_otg {
+	/* Board-side 5 V VBUS source, retained for normal host-mode use. */
+	phy-supply = <&vcc5v0_usb3>;
+	status = "okay";
+};
+
+&combphy0 {
+	/* External SATA0 shares this MPHY with USB3.0 on the schematic. */
+	rockchip,dis-u3otg0-port;
+	status = "okay";
+};
+
+/* OTG port DWC3 (fcc00000): combphy0 stays assigned to SATA0, bind USB2 only. */
+&usb_host0_xhci {
+	dr_mode = "peripheral";
+	phys = <&usb2phy0_otg>;
+	phy-names = "usb2-phy";
+	maximum-speed = "high-speed";
+	status = "okay";
+};
+
+/* USB3 Host1 (below the OTG connector): xHCI DWC3, HS only (combphy1 to SATA1) */
+&usb_host1_xhci {
+	maximum-speed = "high-speed";
+	status = "okay";
+};
+
+&gmac1 {
+	/*
+	 * Board MAC (U-Boot env ethaddr, 2026-08-15 printenv 实测).
+	 * Required: nfs_setup_diskless matches boot.netif.hwaddr against the
+	 * interface MAC; without local-mac-address FreeBSD's eqos generates a
+	 * random one and the NFS root interface lookup fails
+	 * ("nfs_diskless: no interface").
+	 */
+	local-mac-address = [f6 dc 54 d8 f1 a6];
+
+	/*
+	 * PHY reset: CPU_GMAC1_RST# on GPIO3_PC2, active-low.
+	 * 20ms reset pulse + 100ms post-release settle (RTL8211F spec).
+	 */
+	snps,reset-gpio = <&gpio3 RK_PC2 GPIO_ACTIVE_LOW>;
+	snps,reset-active-low;
+	snps,reset-delays-us = <0 20000 100000>;
+
+	phy-mode = "rgmii-rxid";
+	clock_in_out = "output";
+	assigned-clocks = <&cru SCLK_GMAC1_RX_TX>, <&cru SCLK_GMAC1>;
+	assigned-clock-parents = <&cru SCLK_GMAC1_RGMII_SPEED>,
+				 <&cru CLK_MAC1_2TOP>;
+	assigned-clock-rates = <0>, <125000000>;
+	phy-handle = <&rgmii_phy1>;
+	phy-supply = <&vcc3v3_mb>;
+	pinctrl-names = "default";
+	pinctrl-0 = <&gmac1m0_miim
+		     &gmac1m0_tx_bus2
+		     &gmac1m0_rx_bus2
+		     &gmac1m0_rgmii_clk
+		     &gmac1m0_rgmii_bus>;
+	tx_delay = <0x3c>;
+	/*
+	 * RX delay must be 0: the RTL8211F provides the RX clock delay
+	 * itself. U-Boot runtime GRF_GMAC1_CON0/1 measured 0x3c/0x11
+	 * (RX delay disabled), Linux tree dts uses rx_delay=<0x03>.
+	 * The U-Boot tree dts value 0x2f double-delays RX -> CRC errors
+	 * (rdes3 RE bit) -> RX dead on FreeBSD.
+	 */
+	rx_delay = <0x00>;
+	status = "okay";
+};
+
+&mdio1 {
+	rgmii_phy1: ethernet-phy@0 {
+		compatible = "ethernet-phy-ieee802.3-c22";
+		reg = <0x0>;
+	};
+};
+
+&gmac0 {
+	/*
+	 * PHY reset: CPU_GMAC0_RST# on GPIO2_PB1, active-low.
+	 * 20ms reset pulse + 100ms post-release settle (RTL8211F spec).
+	 * Delay values match the vendor Linux DTB (tx 0x4f / rx 0x26).
+	 */
+	snps,reset-gpio = <&gpio2 RK_PB1 GPIO_ACTIVE_LOW>;
+	snps,reset-active-low;
+	snps,reset-delays-us = <0 20000 100000>;
+
+	phy-mode = "rgmii";
+	clock_in_out = "output";
+	assigned-clocks = <&cru SCLK_GMAC0_RX_TX>, <&cru SCLK_GMAC0>;
+	assigned-clock-parents = <&cru SCLK_GMAC0_RGMII_SPEED>;
+	assigned-clock-rates = <0>, <125000000>;
+	phy-handle = <&rgmii_phy0>;
+	phy-supply = <&vcc3v3_mb>;
+	pinctrl-names = "default";
+	pinctrl-0 = <&gmac0_miim
+		     &gmac0_tx_bus2
+		     &gmac0_rx_bus2
+		     &gmac0_rgmii_clk
+		     &gmac0_rgmii_bus>;
+	tx_delay = <0x4f>;
+	rx_delay = <0x26>;
+	status = "okay";
+};
+
+&mdio0 {
+	rgmii_phy0: ethernet-phy@1 {
+		compatible = "ethernet-phy-ieee802.3-c22";
+		reg = <0x1>;
+	};
+};
+
+&pcie2x1 {
+	/*
+	 * PCIe 2.0 x1 M.2 slot (22110).  PERST# on GPIO3_PC1.
+	 * The slot power rail is held by the board's fixed regulator, so
+	 * vpcie3v3-supply is omitted (same reason as pcie3x2).
+	 */
+	reset-gpios = <&gpio3 RK_PC1 GPIO_ACTIVE_HIGH>;
+	pinctrl-names = "default";
+	pinctrl-0 = <&pcie20x1_pins>;
+	status = "okay";
+};
+
+&pcie3x1 {
+	status = "disabled";
+};
+
+&pcie30phy {
+	/* Keep the same optional RK3568 pipe-GRF linkage as the Linux DT. */
+	rockchip,pipe-grf = <&pipegrf>;
+	status = "okay";
+};
+
+&pcie3x2 {
+	/*
+	 * PCIe 3.0 x2 slot.  PERST# on GPIO2_PD6.  The slot power rail is
+	 * already held by the board's fixed regulator; omit vpcie3v3-supply
+	 * here so no attempt is made to switch an always-on regulator during
+	 * link retries.
+	 */
+	reset-gpios = <&gpio2 RK_PD6 GPIO_ACTIVE_HIGH>;
+	pinctrl-names = "default";
+	pinctrl-0 = <&pcie30x2_pins>;
+	status = "okay";
+};
+
+&sata0 {
+	phys = <&combphy0 PHY_TYPE_SATA>;
+	phy-names = "sata-phy";
+	status = "okay";
+};
+
+&sata1 {
+	phys = <&combphy1 PHY_TYPE_SATA>;
+	phy-names = "sata-phy";
+	status = "okay";
+};
+
+&sata2 {
+	/* SATA2 shares combphy2 with pcie2x1; keep combphy2 for PCIe. */
+	status = "disabled";
+};
+
+&combphy1 {
+	rockchip,dis-u3otg1-port;
+	status = "okay";
+};
+
+&combphy2 {
+	status = "okay";
+};
+
+/* SFC/SPI NOR: onboard boot flash (W25Q64DW 8MB), read access only */
+&sfc {
+	status = "okay";
+	#address-cells = <1>;
+	#size-cells = <0>;
+	flash@0 {
+		compatible = "jedec,spi-nor";
+		reg = <0>;
+		spi-max-frequency = <24000000>;
+		spi-rx-bus-width = <4>;
+		spi-tx-bus-width = <1>;
+	};
+};
