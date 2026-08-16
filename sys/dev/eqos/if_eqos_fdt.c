@@ -44,6 +44,7 @@
 
 #include <net/if.h>
 #include <net/if_media.h>
+#include <net/ethernet.h>
 #include <dev/mii/mii.h>
 #include <dev/mii/miivar.h>
 
@@ -259,8 +260,42 @@ eqos_fdt_init(device_t dev)
 	if (eqos_reset)
 		hwreset_deassert(eqos_reset);
 
-	/* set the MAC address if we have OTP data handy */
-	if (!RK_OTP_READ(dev, buffer, 0, sizeof(buffer))) {
+	/*
+	 * Set the MAC address from the FDT first (local-mac-address, then
+	 * mac-address). The reset asserted above clears the MAC registers
+	 * that U-Boot programmed, so a dtb without a MAC property makes the
+	 * generic code generate a random address - which breaks
+	 * nfs_setup_diskless()'s boot.netif.hwaddr interface matching.
+	 */
+	error = OF_getprop(node, "local-mac-address", buffer, ETHER_ADDR_LEN);
+	if (error != ETHER_ADDR_LEN)
+		error = OF_getprop(node, "mac-address", buffer, ETHER_ADDR_LEN);
+	if (error == ETHER_ADDR_LEN) {
+		uint32_t maclo;
+
+		/*
+		 * Write the MAC the same way the driver's own
+		 * eqos_setup_rxfilter() does (LOW = b0<<24|b1<<16|b2<<8|b3,
+		 * HIGH = b4<<8|b5): the hardware register holds the MAC bytes
+		 * byte-reversed, and eqos_get_eaddr()'s htobe32() read-back
+		 * round-trips this layout back to the natural byte order.
+		 */
+		maclo = (uint32_t)buffer[0] << 24 | (uint32_t)buffer[1] << 16 |
+		    (uint32_t)buffer[2] << 8 | (uint32_t)buffer[3];
+		WR4(sc, GMAC_MAC_ADDRESS0_HIGH, buffer[4] << 8 | buffer[5]);
+		WR4(sc, GMAC_MAC_ADDRESS0_LOW, maclo);
+		if (bootverbose)
+			device_printf(dev,
+			    "eqos fdt MAC write %02x:%02x:%02x:%02x:%02x:%02x "
+			    "-> regs hi=%08x lo=%08x\n",
+			    buffer[0], buffer[1], buffer[2], buffer[3],
+			    buffer[4], buffer[5],
+			    bus_read_4(sc->res[EQOS_RES_MEM],
+			    GMAC_MAC_ADDRESS0_HIGH),
+			    bus_read_4(sc->res[EQOS_RES_MEM],
+			    GMAC_MAC_ADDRESS0_LOW));
+	} else if (!RK_OTP_READ(dev, buffer, 0, sizeof(buffer))) {
+		/* fall back to OTP data if we have it */
 		uint32_t mac;
 
 		mac = hash32_buf(buffer, sizeof(buffer), HASHINIT);

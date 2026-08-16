@@ -484,8 +484,15 @@ eqos_init_rings(struct eqos_softc *sc)
 	    (uint32_t)sc->rx.desc_ring_paddr);
 	WR4(sc, GMAC_DMA_CHAN0_RX_RING_LEN, RX_DESC_COUNT - 1);
 
+	/*
+	 * RX tail pointer must reference a valid in-ring descriptor: the DMA
+	 * engine reads the descriptor at the tail address before wrapping, so
+	 * pointing one past the ring (RX_DESC_COUNT) makes it fetch unmapped
+	 * memory -> Fatal Bus Error -> RX dead. Match U-Boot (last descriptor)
+	 * / Linux dwmac4 (base) semantics.
+	 */
 	WR4(sc, GMAC_DMA_CHAN0_RX_END_ADDR,
-	    (uint32_t)sc->rx.desc_ring_paddr + DESC_OFFSET(RX_DESC_COUNT));
+	    (uint32_t)sc->rx.desc_ring_paddr + DESC_OFFSET(RX_DESC_COUNT - 1));
 }
 
 static void

@@ -412,6 +412,13 @@ gic_v3_attach(device_t dev)
 	if (bootverbose) {
 		device_printf(dev, "SPIs: %u, IDs: %u\n",
 		    sc->gic_nirqs, (1 << sc->gic_idbits) - 1);
+		/*
+		 * Record the exception level the kernel was entered at.
+		 * U-Boot booti keeps EL2; this confirms what ATF/OP-TEE
+		 * handed over (relevant for hypervisor work).
+		 */
+		device_printf(dev, "CurrentEL: 0x%lx\n",
+		    (uint64_t)(READ_SPECIALREG(CurrentEL) >> 2));
 	}
 
 	/* Train init sequence for boot CPU */
