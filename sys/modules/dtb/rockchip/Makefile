@@ -20,6 +20,7 @@ DTS=	\
 	rockchip/rk3399-rockpro64.dts \
 	rockchip/rk3566-quartz64-a.dts \
 	rockchip/rk3568-e4ap5g1-itx.dts \
+	rockchip/rk3568-e4ap5g1-itx-nopcie.dts \
 	rockchip/rk3568-nanopi-r5s.dts \
 	rockchip/rk3566-radxa-zero-3e.dts \
 	rockchip/rk3566-radxa-zero-3w.dts
