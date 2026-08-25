@@ -1,0 +1,37 @@
+#
+# RK3568_FBSD -- RK3568 E4AP5G1-ITX board kernel config
+#
+# GENERIC plus the drivers needed for the RK3568 ITX board's NFS boot and
+# the peripherals on its PCIe 3.0 x4 slot (PCIe-to-USB EHCI card with an
+# RTL8188EU USB wifi dongle).
+#
+# Note: the RK3568 PCIe RC/PHY drivers (rk3568_pcie, rk3568_pciephy) are
+# already compiled into GENERIC -- their sys/conf/files.arm64 entries are
+# gated on "fdt pci soc_rockchip_rk3568" with no device keyword, so they are
+# pulled in automatically by GENERIC's std.dev (device pci) + std.rockchip
+# (options SOC_ROCKCHIP_RK3568).  Do NOT add `device rk3568_pcie` here:
+# config(8) rejects it as an unknown device keyword.
+#
+# Additions over GENERIC:
+#   - net80211 wlan stack + rtwn/rtwn_usb: RTL8188EU (and 8821AU) USB wifi
+#
+# The board DTS rk3568-e4ap5g1-itx.dts (sys/contrib/device-tree) enables
+# &pcie3x2 (x4 slot) and &pcie30phy.
+
+ident		RK3568_FBSD
+
+include		"GENERIC"
+
+# net80211 wireless stack (required by rtwn)
+device		wlan
+device		wlan_amrr
+device		wlan_ccmp
+device		wlan_tkip
+device		wlan_wep
+
+# Realtek 802.11n USB wifi (RTL8188EU / 8188EE / 8192EU / 8812AU / 8821AU)
+device		rtwn
+device		rtwn_usb
+
+# Firmware assist module (loads rtwn-rtl8188eufw from /boot/firmware)
+device		firmware

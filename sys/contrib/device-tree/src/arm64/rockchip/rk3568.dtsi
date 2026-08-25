@@ -132,10 +132,20 @@
 		interrupt-names = "sys", "pmc", "msg", "legacy", "err";
 		#interrupt-cells = <1>;
 		interrupt-map-mask = <0 0 0 7>;
-		interrupt-map = <0 0 0 1 &pcie3x2_intc 0>,
-				<0 0 0 2 &pcie3x2_intc 1>,
-				<0 0 0 3 &pcie3x2_intc 2>,
-				<0 0 0 4 &pcie3x2_intc 3>;
+		/*
+		 * Route all legacy INTx to the pcie3x2 "legacy" GIC SPI (162).
+		 * The upstream interrupt-map goes through the pcie3x2_intc
+		 * child node, which declares only one GIC interrupt, so FreeBSD's
+		 * ofw_bus_map_intr() cannot resolve the extra INTA-INTD cells and
+		 * every endpoint's INTx allocation fails ("Could not allocate
+		 * irq" on the MCS9990 PCIe-to-USB card).  RK3568 aggregates all
+		 * legacy INTx to this single SPI, matching the "legacy"
+		 * interrupt-names entry above.
+		 */
+		interrupt-map = <0 0 0 1 &gic GIC_SPI 162 IRQ_TYPE_LEVEL_HIGH>,
+				<0 0 0 2 &gic GIC_SPI 162 IRQ_TYPE_LEVEL_HIGH>,
+				<0 0 0 3 &gic GIC_SPI 162 IRQ_TYPE_LEVEL_HIGH>,
+				<0 0 0 4 &gic GIC_SPI 162 IRQ_TYPE_LEVEL_HIGH>;
 		linux,pci-domain = <2>;
 		num-ib-windows = <6>;
 		num-ob-windows = <2>;

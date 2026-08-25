@@ -106,7 +106,10 @@
 	};
 };
 
-/* All three combinational phys enabled; lanes used by SATA below. */
+/*
+ * All three combinational phys enabled (SATA lanes are not used by the
+ * FreeBSD bring-up; combphy0/1 keep USB3, combphy2 is idle/PCIe).
+ */
 &combphy0 {
 	status = "okay";
 };
@@ -119,16 +122,23 @@
 	status = "okay";
 };
 
+/*
+ * SATA disabled for FreeBSD NFS bring-up: the dwc-ahci probe of
+ * sata@fc400000 (sata1) triggers an SoC external abort (esr 0xbe000011)
+ * during channel init, before NFS root mounts.  The bring-up targets are
+ * NFS root over gmac1 and the PCIe x4 slot (EHCI card + RTL8188EU),
+ * neither of which needs SATA.  Re-enable once the AHCI abort is fixed.
+ */
 &sata0 {
-	status = "okay";
+	status = "disabled";
 };
 
 &sata1 {
-	status = "okay";
+	status = "disabled";
 };
 
 &sata2 {
-	status = "okay";
+	status = "disabled";
 };
 
 /*
@@ -169,6 +179,12 @@
 	snps,reset-delays-us = <0 20000 100000>;
 	tx_delay = <0x4f>;
 	rx_delay = <0x26>;
+	/*
+	 * Fixed board MACs (U-Boot ethaddr convention: gmac0 = f6:dc:54:d8:f1:a6,
+	 * gmac1 = ethaddr+4 = fa:dc:54:d8:f1:a6).  The eqos driver reads these
+	 * from DT because the U-Boot-written MAC is lost on GMAC soft reset.
+	 */
+	local-mac-address = [f6 dc 54 d8 f1 a6];
 	status = "okay";
 };
 
@@ -190,9 +206,18 @@
 	snps,reset-gpio = <&gpio3 RK_PC2 GPIO_ACTIVE_LOW>;
 	snps,reset-active-low;
 	snps,reset-delays-us = <0 20000 100000>;
-	tx_delay = <0x4f>;
-	rx_delay = <0x26>;
+	/*
+	 * NFS root boots over gmac1.  FreeBSD's rgephy does not program the
+	 * PHY's RGMII delays, so unlike Linux (which sets the PHY-side RX
+	 * delay for "rgmii-rxid"), the MAC-side GRF delays must carry the
+	 * timing.  Use the values Linux boots with on this board
+	 * (tx_delay=0x3c, rx_delay=0x03); rx_delay=0x00 left RX with CRC
+	 * errors ("Receive error rdes3=...RE") and the NFS mount stalled.
+	 */
+	tx_delay = <0x3c>;
+	rx_delay = <0x03>;
 	status = "okay";
+	local-mac-address = [fa dc 54 d8 f1 a6];
 };
 
 &mdio0 {
@@ -374,6 +399,17 @@
 	pinctrl-names = "default";
 	pinctrl-0 = <&pcie_reset_pin>;
 	reset-gpios = <&gpio2 RK_PD6 GPIO_ACTIVE_HIGH>;
+	/*
+	 * Override the pcie3x2 ranges to expose only IO + 32-bit MEM.
+	 * The MCS9990 PCIe-to-USB card has 32-bit BARs; with the upstream
+	 * MEM64 range FreeBSD assigns its BARs into the 64-bit window and the
+	 * resulting bus-space mapping comes out unaligned, so EHCI/OHCI MMIO
+	 * accesses fault on arm64 ("Misaligned access").  Restricting to
+	 * 32-bit MEM (0xf0200000-0xf3e00000) keeps BARs in the aligned
+	 * direct-mapped window.
+	 */
+	ranges = <0x01000000 0x0 0xf0100000 0x0 0xf0100000 0x0 0x00100000>,
+		 <0x02000000 0x0 0xf0200000 0x0 0xf0200000 0x0 0x01e00000>;
 	status = "okay";
 };
 

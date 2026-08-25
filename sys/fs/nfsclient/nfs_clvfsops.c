@@ -485,6 +485,21 @@ nfs_mountroot(struct mount *mp)
 	error = ifioctl(so, SIOCAIFADDR, (caddr_t)&nd->myif, td);
 	if (error)
 		panic("nfs_mountroot: SIOCAIFADDR: %d", error);
+	/*
+	 * SIOCAIFADDR does not set IFF_UP (only ifconfig(8) does that via a
+	 * separate SIOCSIFFLAGS).  When the kernel is launched directly by
+	 * U-Boot booti there is no loader/pxeboot to bring the interface up,
+	 * so without this the interface stays down, if_output drops every
+	 * packet (no ARP, no TCP SYN), and the NFS root mount hangs.  Bring
+	 * the interface up explicitly, preserving the driver-set flags.
+	 */
+	bzero(&ir, sizeof(ir));
+	bcopy(nd->myif.ifra_name, ir.ifr_name, IFNAMSIZ);
+	if (ifioctl(so, SIOCGIFFLAGS, (caddr_t)&ir, td) == 0)
+		ir.ifr_flags |= IFF_UP;
+	else
+		ir.ifr_flags = IFF_UP;
+	ifioctl(so, SIOCSIFFLAGS, (caddr_t)&ir, td);
 	if ((cp = kern_getenv("boot.netif.mtu")) != NULL) {
 		ir.ifr_mtu = strtol(cp, NULL, 10);
 		bcopy(nd->myif.ifra_name, ir.ifr_name, IFNAMSIZ);

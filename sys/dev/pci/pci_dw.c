@@ -534,10 +534,31 @@ pci_dw_read_config(device_t dev, u_int bus, u_int slot,
 		data = bus_read_1(res, reg);
 		break;
 	case 2:
-		data = bus_read_2(res, reg);
+		if ((reg & 1) != 0) {
+			/* Unaligned 16-bit config read: assemble from bytes. */
+			data = bus_read_1(res, reg) |
+			    (bus_read_1(res, reg + 1) << 8);
+		} else
+			data = bus_read_2(res, reg);
 		break;
 	case 4:
-		data = bus_read_4(res, reg);
+		if ((reg & 3) != 0) {
+			/*
+			 * Unaligned 32-bit config read: the DesignWare config
+			 * window is memory-mapped and arm64 faults on
+			 * unaligned bus_read_4 (observed reading the MCS9990
+			 * PCIe-to-USB card's MSI capability around offset 0xff).
+			 * Assemble from bytes instead.
+			 */
+			data = bus_read_1(res, reg) |
+			    (bus_read_1(res, reg + 1) << 8) |
+			    (bus_read_1(res, reg + 2) << 16) |
+			    (bus_read_1(res, reg + 3) << 24);
+			if (bootverbose)
+				device_printf(dev, "unaligned config read reg=%#x\n",
+				    reg);
+		} else
+			data = bus_read_4(res, reg);
 		break;
 	default:
 		data =  0xFFFFFFFFU;
@@ -581,10 +602,20 @@ pci_dw_write_config(device_t dev, u_int bus, u_int slot,
 		bus_write_1(res, reg, val);
 		break;
 	case 2:
-		bus_write_2(res, reg, val);
+		if ((reg & 1) != 0) {
+			bus_write_1(res, reg, val & 0xff);
+			bus_write_1(res, reg + 1, (val >> 8) & 0xff);
+		} else
+			bus_write_2(res, reg, val);
 		break;
 	case 4:
-		bus_write_4(res, reg, val);
+		if ((reg & 3) != 0) {
+			bus_write_1(res, reg, val & 0xff);
+			bus_write_1(res, reg + 1, (val >> 8) & 0xff);
+			bus_write_1(res, reg + 2, (val >> 16) & 0xff);
+			bus_write_1(res, reg + 3, (val >> 24) & 0xff);
+		} else
+			bus_write_4(res, reg, val);
 		break;
 	default:
 		break;

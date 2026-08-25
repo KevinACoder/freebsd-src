@@ -100,6 +100,8 @@ struct rk3568_pcie_softc {
 	regulator_t			regulator;
 	hwreset_t			hwreset;
 	phy_t				phy;
+	/* interrupt-map parse info for PCIe legacy INTx routing */
+	struct ofw_bus_iinfo		pci_iinfo;
 };
 
 static struct ofw_compat_data compat_data[] = {
@@ -290,6 +292,42 @@ rk3568_pcie_detach(device_t dev)
 }
 
 static int
+rk3568_pcie_route_interrupt(device_t bus, device_t dev, int pin)
+{
+	struct rk3568_pcie_softc *sc = device_get_softc(bus);
+	struct ofw_pci_register reg;
+	uint32_t pintr, mintr[4];
+	phandle_t iparent;
+	int intrcells;
+
+	/*
+	 * Route a PCIe legacy INTx to the interrupt parent described by the
+	 * DTS interrupt-map.  Without this, endpoints that only support INTx
+	 * (e.g. the MCS9990 PCIe-to-USB EHCI/OHCI card) fail to allocate an
+	 * IRQ and USB on the x4 slot does not work.  Mirrors
+	 * generic_pcie_fdt_route_interrupt().
+	 */
+	pintr = pin;
+
+	bzero(&reg, sizeof(reg));
+	reg.phys_hi = (pci_get_bus(dev) << OFW_PCI_PHYS_HI_BUSSHIFT) |
+	    (pci_get_slot(dev) << OFW_PCI_PHYS_HI_DEVICESHIFT) |
+	    (pci_get_function(dev) << OFW_PCI_PHYS_HI_FUNCTIONSHIFT);
+
+	intrcells = ofw_bus_lookup_imap(ofw_bus_get_node(dev),
+	    &sc->pci_iinfo, &reg, sizeof(reg), &pintr, sizeof(pintr),
+	    mintr, sizeof(mintr), &iparent);
+	if (intrcells != 0) {
+		pintr = ofw_bus_map_intr(dev, iparent, intrcells, mintr);
+		return (pintr);
+	}
+
+	device_printf(bus, "could not route pin %d for device %d.%d\n",
+	    pin, pci_get_slot(dev), pci_get_function(dev));
+	return (PCI_INVALID_IRQ);
+}
+
+static int
 rk3568_pcie_attach(device_t dev)
 {
 	struct rk3568_pcie_softc *sc = device_get_softc(dev);
@@ -297,6 +335,8 @@ rk3568_pcie_attach(device_t dev)
 
 	sc->dev = dev;
 	sc->node = ofw_bus_get_node(dev);
+	/* Set up interrupt-map parsing for PCIe legacy INTx routing. */
+	ofw_bus_setup_iinfo(sc->node, &sc->pci_iinfo, sizeof(cell_t));
 
 	/* Setup resources */
 	if ((error = ofw_bus_find_string_index(sc->node, "reg-names", "apb",
@@ -413,6 +453,7 @@ static device_method_t rk3568_pcie_methods[] = {
 
 	/* PCI DW interface */
 	DEVMETHOD(pci_dw_get_link,	rk3568_pcie_get_link),
+	DEVMETHOD(pcib_route_interrupt,	rk3568_pcie_route_interrupt),
 
 	DEVMETHOD_END
 };

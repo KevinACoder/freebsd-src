@@ -485,7 +485,7 @@ eqos_init_rings(struct eqos_softc *sc)
 	WR4(sc, GMAC_DMA_CHAN0_RX_RING_LEN, RX_DESC_COUNT - 1);
 
 	WR4(sc, GMAC_DMA_CHAN0_RX_END_ADDR,
-	    (uint32_t)sc->rx.desc_ring_paddr + DESC_OFFSET(RX_DESC_COUNT));
+	    (uint32_t)sc->rx.desc_ring_paddr + DESC_OFFSET(RX_DESC_COUNT - 1));
 }
 
 static void
@@ -950,6 +950,30 @@ static void
 eqos_get_eaddr(struct eqos_softc *sc, uint8_t *eaddr)
 {
 	uint32_t maclo, machi;
+	phandle_t node;
+
+	/*
+	 * Prefer a DT MAC-address property when present.  On the RK3568 the
+	 * U-Boot-written MAC is lost when the GMAC core is soft reset, so the
+	 * register reads all-ones and the driver would fall back to a random
+	 * f2:00:xx address; the board dts carries the fixed MAC instead (see
+	 * rk3568-e4ap5g1-itx.dts gmac1 local-mac-address).  Same pattern as
+	 * if_genet.c.
+	 */
+	node = ofw_bus_get_node(sc->dev);
+	device_printf(sc->dev, "eqos_dbg: node=%d\n", node);
+	if (node != -1) {
+		ssize_t r;
+		r = OF_getprop(node, "local-mac-address", eaddr, ETHER_ADDR_LEN);
+		device_printf(sc->dev, "eqos_dbg: OF_getprop local-mac-address -> %zd\n", r);
+		if (r == ETHER_ADDR_LEN) {
+			device_printf(sc->dev,
+			    "using DT local-mac-address %02x:%02x:%02x:%02x:%02x:%02x\n",
+			    eaddr[0], eaddr[1], eaddr[2],
+			    eaddr[3], eaddr[4], eaddr[5]);
+			return;
+		}
+	}
 
 	maclo = htobe32(RD4(sc, GMAC_MAC_ADDRESS0_LOW));
 	machi = htobe16(RD4(sc, GMAC_MAC_ADDRESS0_HIGH) & 0xFFFF);
