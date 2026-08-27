@@ -1,0 +1,19 @@
+# RK3568 mfsBSD-style RAM-disk kernel (ramdisk bring-up line).
+#
+# Parallel to RK3568_FBSD (the NFS-root line): same feature set, distinct
+# ident so bmake gets a dedicated objdir (build/.../sys/RK3568_MFS) and the
+# two build lines never share kernel objects.
+#
+# The mfsroot UFS image produced by scripts/build-mfsbsd-arm64.sh is linked
+# into the kernel via sys/dev/md/embedfs.S (.incbin), driven by kern.pre.mk
+# when MFS_IMAGE is defined and MD_ROOT_SIZE is not configured.  std.arm64
+# supplies options MD_ROOT (inherited through GENERIC), so the kernel
+# registers the embedded image as md0 at boot and mounts ufs:/dev/md0 as
+# root with no loader, no disk and no network.
+ident		RK3568_MFS
+include		"RK3568_FBSD"
+
+# The embedfs_*.o rule depends on this file, so refreshing mfsroot.ufs and
+# rebuilding triggers exactly one embed recompile + relink.  Path is fixed;
+# keep it in sync with MFSRK3568_WORK_ROOT in scripts/build-mfsbsd-arm64.sh.
+makeoptions	MFS_IMAGE=/home/zhugy/workspace/rk3568_lab/os/freebsd/work/mfsbsd-arm64/mfsroot.ufs
