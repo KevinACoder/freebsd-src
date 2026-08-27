@@ -65,6 +65,7 @@
 #include <dev/ofw/ofw_subr.h>
 
 #include <dev/clk/clk.h>
+#include <dev/hwreset/hwreset.h>
 #include <dev/phy/phy_usb.h>
 #endif
 
@@ -391,12 +392,18 @@ snps_dwc3_common_attach(device_t dev, bool is_fdt)
 #ifdef FDT
 	phandle_t node;
 	phy_t usb2_phy, usb3_phy;
-	uint32_t reg;
+	hwreset_t rst;
 #endif
 	int error, rid;
 
 	sc = device_get_softc(dev);
 	sc->dev = dev;
+#ifdef FDT
+	sc->clk_ref = NULL;
+	sc->clk_suspend = NULL;
+	sc->clk_bus = NULL;
+	rst = NULL;
+#endif
 
 	rid = 0;
 	sc->mem_res = bus_alloc_resource_any(dev, SYS_RES_MEMORY, &rid,
@@ -407,6 +414,43 @@ snps_dwc3_common_attach(device_t dev, bool is_fdt)
 	}
 	sc->bst = rman_get_bustag(sc->mem_res);
 	sc->bsh = rman_get_bushandle(sc->mem_res);
+
+#ifdef FDT
+	node = ofw_bus_get_node(dev);
+
+	/*
+	 * Bring up the clocks and release the CRU domain reset before the
+	 * first register access below: on parts nobody (e.g. U-Boot) has
+	 * initialized yet, reading GSNPSID with a dead bus clock is either
+	 * garbage or an external abort.
+	 */
+	if (is_fdt && (ofw_bus_is_compatible(dev,
+	    "rockchip,rk3328-dwc3") == 1 || ofw_bus_is_compatible(dev,
+	    "rockchip,rk3568-dwc3") == 1)) {
+		if (clk_get_by_ofw_name(dev, node, "ref_clk", &sc->clk_ref) != 0)
+			device_printf(dev, "Cannot get ref_clk\n");
+		if (clk_get_by_ofw_name(dev, node, "suspend_clk",
+		    &sc->clk_suspend) != 0)
+			device_printf(dev, "Cannot get suspend_clk\n");
+		if (clk_get_by_ofw_name(dev, node, "bus_clk", &sc->clk_bus) != 0)
+			device_printf(dev, "Cannot get bus_clk\n");
+	}
+	if (is_fdt) {
+		if (sc->clk_ref != NULL)
+			(void)clk_enable(sc->clk_ref);
+		if (sc->clk_suspend != NULL)
+			(void)clk_enable(sc->clk_suspend);
+		if (sc->clk_bus != NULL)
+			(void)clk_enable(sc->clk_bus);
+
+		if (hwreset_get_by_ofw_idx(dev, node, 0, &rst) == 0) {
+			(void)hwreset_assert(rst);
+			DELAY(100);
+			(void)hwreset_deassert(rst);
+			hwreset_release(rst);
+		}
+	}
+#endif
 
 	sc->snpsid = DWC3_READ(sc, DWC3_GSNPSID);
 	sc->snpsversion = DWC3_VERSION(sc->snpsid);
@@ -442,32 +486,6 @@ snps_dwc3_common_attach(device_t dev, bool is_fdt)
 	if (!is_fdt)
 		goto skip_phys;
 
-	node = ofw_bus_get_node(dev);
-
-	/* Get the clocks if any */
-	if (ofw_bus_is_compatible(dev, "rockchip,rk3328-dwc3") == 1 ||
-	    ofw_bus_is_compatible(dev, "rockchip,rk3568-dwc3") == 1) {
-		if (clk_get_by_ofw_name(dev, node, "ref_clk", &sc->clk_ref) != 0)
-			device_printf(dev, "Cannot get ref_clk\n");
-		if (clk_get_by_ofw_name(dev, node, "suspend_clk", &sc->clk_suspend) != 0)
-			device_printf(dev, "Cannot get suspend_clk\n");
-		if (clk_get_by_ofw_name(dev, node, "bus_clk", &sc->clk_bus) != 0)
-			device_printf(dev, "Cannot get bus_clk\n");
-	}
-
-	if (sc->clk_ref != NULL) {
-		if (clk_enable(sc->clk_ref) != 0)
-			device_printf(dev, "Cannot enable ref_clk\n");
-	}
-	if (sc->clk_suspend != NULL) {
-		if (clk_enable(sc->clk_suspend) != 0)
-			device_printf(dev, "Cannot enable suspend_clk\n");
-	}
-	if (sc->clk_bus != NULL) {
-		if (clk_enable(sc->clk_bus) != 0)
-			device_printf(dev, "Cannot enable bus_clk\n");
-	}
-
 	/* Get the phys */
 	usb2_phy = usb3_phy = NULL;
 	error = phy_get_by_ofw_name(dev, node, "usb2-phy", &usb2_phy);
@@ -482,11 +500,12 @@ snps_dwc3_common_attach(device_t dev, bool is_fdt)
 
 			hwparams3 = DWC3_READ(sc, DWC3_GHWPARAMS3);
 			if (DWC3_HWPARAMS3_SSPHY(hwparams3) == DWC3_HWPARAMS3_SSPHY_DISABLE) {
-				reg = DWC3_READ(sc, DWC3_GUCTL1);
+				uint32_t reg1 = DWC3_READ(sc, DWC3_GUCTL1);
+
 				if (bootverbose)
 					device_printf(dev, "Forcing USB2 clock only\n");
-				reg |= DWC3_GUCTL1_DEV_FORCE_20_CLK_FOR_30_CLK;
-				DWC3_WRITE(sc, DWC3_GUCTL1, reg);
+				reg1 |= DWC3_GUCTL1_DEV_FORCE_20_CLK_FOR_30_CLK;
+				DWC3_WRITE(sc, DWC3_GUCTL1, reg1);
 			}
 		}
 	}

@@ -85,12 +85,18 @@ static struct ofw_compat_data compat_data[] = {
 	{ NULL,				0 }
 };
 
+enum RK_USBPHY {
+	RK_USBPHY_HOST = 0,
+	RK_USBPHY_OTG,
+	RK_USBPHY_NUM,
+};
+
 struct rk_usb2phy_softc {
 	device_t		dev;
 	struct syscon		*grf;
-	regulator_t		phy_supply;
+	regulator_t		phy_supply[RK_USBPHY_NUM];
 	clk_t			clk;
-	int			mode;
+	int			mode[RK_USBPHY_NUM];
 };
 
 /* Phy class and methods. */
@@ -109,11 +115,6 @@ DEFINE_CLASS_1(rk_usb2phy_phynode, rk_usb2phy_phynode_class,
     rk_usb2phy_phynode_methods,
     sizeof(struct phynode_usb_sc), phynode_usb_class);
 
-enum RK_USBPHY {
-	RK_USBPHY_HOST = 0,
-	RK_USBPHY_OTG,
-};
-
 static int
 rk_usb2phy_enable(struct phynode *phynode, bool enable)
 {
@@ -126,14 +127,14 @@ rk_usb2phy_enable(struct phynode *phynode, bool enable)
 	phy = phynode_get_id(phynode);
 	sc = device_get_softc(dev);
 
-	if (phy != RK_USBPHY_HOST)
+	if (phy < RK_USBPHY_HOST || phy >= RK_USBPHY_NUM)
 		return (ERANGE);
 
-	if (sc->phy_supply) {
+	if (sc->phy_supply[phy]) {
 		if (enable)
-			error = regulator_enable(sc->phy_supply);
+			error = regulator_enable(sc->phy_supply[phy]);
 		else
-			error = regulator_disable(sc->phy_supply);
+			error = regulator_disable(sc->phy_supply[phy]);
 		if (error != 0) {
 			device_printf(dev, "Cannot %sable the regulator\n",
 			    enable ? "En" : "Dis");
@@ -157,10 +158,10 @@ rk_usb2phy_get_mode(struct phynode *phynode, int *mode)
 	phy = phynode_get_id(phynode);
 	sc = device_get_softc(dev);
 
-	if (phy != RK_USBPHY_HOST)
+	if (phy < RK_USBPHY_HOST || phy >= RK_USBPHY_NUM)
 		return (ERANGE);
 
-	*mode = sc->mode;
+	*mode = sc->mode[phy];
 
 	return (0);
 }
@@ -176,10 +177,10 @@ rk_usb2phy_set_mode(struct phynode *phynode, int mode)
 	phy = phynode_get_id(phynode);
 	sc = device_get_softc(dev);
 
-	if (phy != RK_USBPHY_HOST)
+	if (phy < RK_USBPHY_HOST || phy >= RK_USBPHY_NUM)
 		return (ERANGE);
 
-	sc->mode = mode;
+	sc->mode[phy] = mode;
 
 	return (0);
 }
@@ -344,8 +345,12 @@ rk_usb2phy_attach(device_t dev)
 	struct rk_usb2phy_softc *sc;
 	struct phynode_init_def phy_init;
 	struct phynode *phynode;
-	phandle_t node, host;
-	int err;
+	static const char *port_names[RK_USBPHY_NUM] = {
+	    "host-port", "otg-port"
+	};
+	static const char *port_desc[RK_USBPHY_NUM] = { "host", "otg" };
+	phandle_t node, child;
+	int i, nregistered, err;
 
 	sc = device_get_softc(dev);
 	sc->dev = dev;
@@ -380,33 +385,41 @@ rk_usb2phy_attach(device_t dev)
 	if (err != 0)
 		return (err);
 
-	/* Only host is supported right now */
+	nregistered = 0;
+	for (i = 0; i < RK_USBPHY_NUM; i++) {
+		child = ofw_bus_find_child(node, port_names[i]);
+		if (child == 0 || !ofw_bus_node_status_okay(child))
+			continue;
 
-	host = ofw_bus_find_child(node, "host-port");
-	if (host == 0) {
-		device_printf(dev, "Cannot find host-port child node\n");
+		regulator_get_by_ofw_property(dev, child, "phy-supply",
+		    &sc->phy_supply[i]);
+		/*
+		 * All the in-tree users run these ports as host (the dwc3
+		 * nodes carry dr_mode = "host"), including the otg-port.
+		 */
+		sc->mode[i] = PHY_USB_MODE_HOST;
+		memset(&phy_init, 0, sizeof(phy_init));
+		phy_init.id = i;
+		phy_init.ofw_node = child;
+		phynode = phynode_create(dev, &rk_usb2phy_phynode_class,
+		    &phy_init);
+		if (phynode == NULL) {
+			device_printf(dev, "failed to create %s USB2PHY\n",
+			    port_desc[i]);
+			return (ENXIO);
+		}
+		if (phynode_register(phynode) == NULL) {
+			device_printf(dev, "failed to register %s USB2PHY\n",
+			    port_desc[i]);
+			return (ENXIO);
+		}
+		OF_device_register_xref(OF_xref_from_node(child), dev);
+		nregistered++;
+	}
+	if (nregistered == 0) {
+		device_printf(dev, "No enabled USB2PHY port child nodes\n");
 		return (ENXIO);
 	}
-
-	if (!ofw_bus_node_status_okay(host)) {
-		device_printf(dev, "host-port isn't okay\n");
-		return (0);
-	}
-
-	regulator_get_by_ofw_property(dev, host, "phy-supply", &sc->phy_supply);
-	phy_init.id = RK_USBPHY_HOST;
-	phy_init.ofw_node = host;
-	phynode = phynode_create(dev, &rk_usb2phy_phynode_class, &phy_init);
-	if (phynode == NULL) {
-		device_printf(dev, "failed to create host USB2PHY\n");
-		return (ENXIO);
-	}
-	if (phynode_register(phynode) == NULL) {
-		device_printf(dev, "failed to register host USB2PHY\n");
-		return (ENXIO);
-	}
-
-	OF_device_register_xref(OF_xref_from_node(host), dev);
 
 	return (0);
 }

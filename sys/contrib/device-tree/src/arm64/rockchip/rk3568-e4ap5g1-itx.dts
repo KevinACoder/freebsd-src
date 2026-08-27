@@ -83,26 +83,32 @@
 	};
 
 	/*
-	 * Multiphy mode-select straps: driven low for the 3-SATA variant.
-	 * U-Boot already latches the GPIO state before FreeBSD starts; the
-	 * nodes are kept so the mux intent is recorded in the DTB.
+	 * GPIO-gated 5V rails feeding the USB Type-A connectors
+	 * (gpio0_A5 = OTG-side jack VBUS, gpio0_A6 = host-jack VBUS),
+	 * matching doc/vendor/rk3568-e4ap5g1lts-itx.dtsi.  These pins were
+	 * previously recorded as "multiphy mux" placeholders that held both
+	 * lines low, leaving every onboard USB port unpowered.
 	 */
-	multiphy_mux_sel0: mphy-mux-sel0 {
+	vcc5v0_otg: regulator-vcc5v0-otg {
 		compatible = "regulator-fixed";
+		regulator-name = "vcc5v0_otg";
+		regulator-min-microvolt = <5000000>;
+		regulator-max-microvolt = <5000000>;
 		gpio = <&gpio0 RK_PA5 GPIO_ACTIVE_HIGH>;
-		enable-active-low;
+		enable-active-high;
 		regulator-boot-on;
-		regulator-always-on;
-		regulator-name = "multiphy_mux_sel0";
+		vin-supply = <&vcc5v0_usb>;
 	};
 
-	multiphy_mux_sel1: mphy-mux-sel1 {
+	vcc5v0_host: regulator-vcc5v0-host {
 		compatible = "regulator-fixed";
+		regulator-name = "vcc5v0_host";
+		regulator-min-microvolt = <5000000>;
+		regulator-max-microvolt = <5000000>;
 		gpio = <&gpio0 RK_PA6 GPIO_ACTIVE_HIGH>;
-		enable-active-low;
+		enable-active-high;
 		regulator-boot-on;
-		regulator-always-on;
-		regulator-name = "multiphy_mux_sel1";
+		vin-supply = <&vcc5v0_usb>;
 	};
 };
 
@@ -499,11 +505,12 @@
 };
 
 &usb2phy0_host {
-	phy-supply = <&vcc5v0_usb>;
+	phy-supply = <&vcc5v0_host>;
 	status = "okay";
 };
 
 &usb2phy0_otg {
+	phy-supply = <&vcc5v0_otg>;
 	status = "okay";
 };
 
@@ -512,12 +519,12 @@
 };
 
 &usb2phy1_host {
-	phy-supply = <&vcc5v0_usb>;
+	phy-supply = <&vcc5v0_host>;
 	status = "okay";
 };
 
 &usb2phy1_otg {
-	phy-supply = <&vcc5v0_usb>;
+	phy-supply = <&vcc5v0_host>;
 	status = "okay";
 };
 
