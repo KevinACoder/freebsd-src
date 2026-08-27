@@ -110,6 +110,37 @@
 		regulator-boot-on;
 		vin-supply = <&vcc5v0_usb>;
 	};
+
+	/*
+	 * Type-A socket VBUS gates on GPIO3_A0/A1 (schematic USB2_VBUS_EN /
+	 * USB3_VBUS_EN).  These are the rails the vendor and Linux trees
+	 * wire every usb2phy port supply to; without them the panel
+	 * connectors stay unpowered no matter what the USB2PHY lane does.
+	 * No pinctrl-0 here on purpose: the rockchip pinctrl nodes are not
+	 * consumed by the FreeBSD fixed-regulator driver and the GPIO is
+	 * driven directly.
+	 */
+	vcc5v0_usb2: regulator-vcc5v0-usb2 {
+		compatible = "regulator-fixed";
+		regulator-name = "vcc5v0_usb2";
+		regulator-min-microvolt = <5000000>;
+		regulator-max-microvolt = <5000000>;
+		gpio = <&gpio3 RK_PA0 GPIO_ACTIVE_HIGH>;
+		enable-active-high;
+		regulator-boot-on;
+		vin-supply = <&vcc5v0_sys>;
+	};
+
+	vcc5v0_usb3: regulator-vcc5v0-usb3 {
+		compatible = "regulator-fixed";
+		regulator-name = "vcc5v0_usb3";
+		regulator-min-microvolt = <5000000>;
+		regulator-max-microvolt = <5000000>;
+		gpio = <&gpio3 RK_PA1 GPIO_ACTIVE_HIGH>;
+		enable-active-high;
+		regulator-boot-on;
+		vin-supply = <&vcc5v0_sys>;
+	};
 };
 
 /*
@@ -504,13 +535,15 @@
 	status = "okay";
 };
 
+/* Supply wiring mirrors the vendor/Linux tree: the GPIO3_A0 rail feeds
+ * every Type-A lane except the otg jack, which is on GPIO3_A1. */
 &usb2phy0_host {
-	phy-supply = <&vcc5v0_host>;
+	phy-supply = <&vcc5v0_usb2>;
 	status = "okay";
 };
 
 &usb2phy0_otg {
-	phy-supply = <&vcc5v0_otg>;
+	phy-supply = <&vcc5v0_usb3>;
 	status = "okay";
 };
 
@@ -519,12 +552,12 @@
 };
 
 &usb2phy1_host {
-	phy-supply = <&vcc5v0_host>;
+	phy-supply = <&vcc5v0_usb2>;
 	status = "okay";
 };
 
 &usb2phy1_otg {
-	phy-supply = <&vcc5v0_host>;
+	phy-supply = <&vcc5v0_usb2>;
 	status = "okay";
 };
 

@@ -51,14 +51,41 @@
 #include "clkdev_if.h"
 #include "syscon_if.h"
 
+enum RK_USBPHY {
+	RK_USBPHY_HOST = 0,
+	RK_USBPHY_OTG,
+	RK_USBPHY_NUM,
+};
+
 struct rk_usb2phy_reg {
 	uint32_t	offset;
 	uint32_t	enable_mask;
 	uint32_t	disable_mask;
 };
 
+/*
+ * phy_sus release entry for one port lane.  Writing
+ * (wrmask << 16) | val fixes up the SW override group in the usb2phy
+ * GRF window; without it a lane left suspended/floating by firmware
+ * never sees D+/D- line-state changes.  Values are the ones measured
+ * in a working Linux session on E4AP5G1-ITX (2026-08-27, run
+ * linux-usb-baseline-20260827-132742): host lanes carry phy_sus =
+ * 0x1d2 ("suspend control from controller"), the otg lane runs with
+ * phy_sus cleared and the ID pin forced to ground so the dwc3 can be
+ * used as pure host.
+ */
+struct rk_usb2phy_sus {
+	uint32_t	offset;
+	uint32_t	wrmask;
+	uint32_t	val;
+};
+
+#define	RK_USB2PHY_SUS_WRMASK	(0x1ff << 16)
+
 struct rk_usb2phy_regs {
 	struct rk_usb2phy_reg	clk_ctl;
+	bool			sus_fixup;
+	struct rk_usb2phy_sus	port_ctl[RK_USBPHY_NUM];
 };
 
 struct rk_usb2phy_regs rk3399_regs = {
@@ -76,6 +103,16 @@ struct rk_usb2phy_regs rk3568_regs = {
 		.enable_mask = 0x100000,
 		/* bit 4 put pll in suspend */
 		.disable_mask = 0x100010,
+	},
+	.sus_fixup = true,
+	.port_ctl = {
+		[RK_USBPHY_HOST] = {
+		    .offset = 0x0004, .wrmask = RK_USB2PHY_SUS_WRMASK,
+		    .val = 0x1d2 },
+		[RK_USBPHY_OTG] = {
+		    /* iddig_output/iddig_en included, forces host role */
+		    .offset = 0x0000, .wrmask = (0xfff << 16),
+		    .val = 0x0c00 },
 	}
 };
 
@@ -85,18 +122,13 @@ static struct ofw_compat_data compat_data[] = {
 	{ NULL,				0 }
 };
 
-enum RK_USBPHY {
-	RK_USBPHY_HOST = 0,
-	RK_USBPHY_OTG,
-	RK_USBPHY_NUM,
-};
-
 struct rk_usb2phy_softc {
 	device_t		dev;
 	struct syscon		*grf;
 	regulator_t		phy_supply[RK_USBPHY_NUM];
 	clk_t			clk;
 	int			mode[RK_USBPHY_NUM];
+	bool			sus_done[RK_USBPHY_NUM];
 };
 
 /* Phy class and methods. */
@@ -343,6 +375,7 @@ static int
 rk_usb2phy_attach(device_t dev)
 {
 	struct rk_usb2phy_softc *sc;
+	const struct rk_usb2phy_regs *regs;
 	struct phynode_init_def phy_init;
 	struct phynode *phynode;
 	static const char *port_names[RK_USBPHY_NUM] = {
@@ -401,6 +434,25 @@ rk_usb2phy_attach(device_t dev)
 		memset(&phy_init, 0, sizeof(phy_init));
 		phy_init.id = i;
 		phy_init.ofw_node = child;
+
+		/*
+		 * The generic host controllers enable their phys but never
+		 * clear the GRF suspend override; a lane left suspended by
+		 * firmware stays deaf to device connects forever.  Release
+		 * each lane once, here, before any controller samples line
+		 * state (see struct rk_usb2phy_sus for the measured values).
+		 */
+		if (!sc->sus_done[i]) {
+			regs = (const struct rk_usb2phy_regs *)
+			    ofw_bus_search_compatible(dev, compat_data)->ocd_data;
+			if (regs->sus_fixup) {
+				SYSCON_WRITE_4(sc->grf, regs->port_ctl[i].offset,
+				    regs->port_ctl[i].wrmask |
+				    regs->port_ctl[i].val);
+				sc->sus_done[i] = true;
+			}
+		}
+
 		phynode = phynode_create(dev, &rk_usb2phy_phynode_class,
 		    &phy_init);
 		if (phynode == NULL) {
@@ -420,6 +472,9 @@ rk_usb2phy_attach(device_t dev)
 		device_printf(dev, "No enabled USB2PHY port child nodes\n");
 		return (ENXIO);
 	}
+	if (sc->sus_done[RK_USBPHY_HOST] || sc->sus_done[RK_USBPHY_OTG])
+		/* Wait for the UTMI clock to become stable. */
+		DELAY(2000);
 
 	return (0);
 }
