@@ -5907,6 +5907,16 @@ iwm_pci_attach(device_t dev)
 
 	sc = device_get_softc(dev);
 
+#ifdef IWM_DEBUG
+	/*
+	 * RK3568 lab bring-up: enable the debug trace by default so the
+	 * preinit-time (pre-mountroot) init sequence is visible on the
+	 * serial console.  Every class except IWM_DEBUG_REGISTER (0x20000000)
+	 * to keep the 115200 console readable.
+	 */
+	sc->sc_debug = 0xdfffffff;
+#endif
+
 	/* We disable the RETRY_TIMEOUT register (0x41) to keep
 	 * PCI Tx retries from interfering with C3 CPU state */
 	pci_write_config(dev, PCI_CFG_RETRY_TIMEOUT, 0x00, 1);

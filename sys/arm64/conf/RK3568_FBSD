@@ -37,6 +37,9 @@ device		rtwn_usb
 # into the kernel image because the ramdisk root carries no /boot/firmware.
 device		iwm
 device		iwm7260fw
+# Runtime debug mask via sysctl dev.iwm.0.debug (0xffffffff = IWM_DEBUG_ANY);
+# needed for the RESET/TRANS/CMD trace of the 7260 bring-up on pcie3x2.
+options		IWM_DEBUG
 
 # Firmware assist module (loads rtwn-rtl8188eufw from /boot/firmware)
 device		firmware
