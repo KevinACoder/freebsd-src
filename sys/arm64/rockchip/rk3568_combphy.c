@@ -336,6 +336,52 @@ rk3568_combphy_enable(struct phynode *phynode, bool enable)
 		    bus_read_4(sc->mem, PHYREG8) | PHYREG8_SSC_EN);
 	}
 
+	/*
+	 * PCIe bringup sequence mirrored verbatim from the proven bare-metal
+	 * fdwpcie driver (standalone SDK).  The stock naneng-style sequence
+	 * above (also used by U-Boot, which carries pcie2x1 disabled on this
+	 * board with "combphy PLL never locks") does not train the combphy2
+	 * PCIe link here; with the fdwpcie sequence the M.2 SM2263EN trains
+	 * reliably.  Written after the rate switch so nothing overrides it,
+	 * before the PHY reset release (configure-then-release, as there).
+	 */
+	if (sc->mode == PHY_TYPE_PCIE) {
+		uint32_t val;
+		extern bus_space_tag_t fdtbus_bs_tag;
+		bus_space_tag_t bst = fdtbus_bs_tag;
+		bus_space_handle_t bsh;
+
+		/* PMUCRU clksel9/clkgate2: combphy2 refclk config */
+		if (bus_space_map(bst, 0xfdd00000UL, 0x200UL, 0, &bsh) == 0) {
+			bus_space_write_4(bst, bsh, 0x124, 0xF0000000U);
+			bus_space_write_4(bst, bsh, 0x188, 0x18000000U);
+			bus_space_unmap(bst, bsh, 0x200UL);
+		}
+		/* PIPE_PHY_GRF2 PCIe mode + pipe_clk_100m */
+		SYSCON_WRITE_4(sc->pipe_phy_grf, 0x0, 0xFFFF1000U);
+		SYSCON_WRITE_4(sc->pipe_phy_grf, 0x4, 0xFFFF0000U);
+		SYSCON_WRITE_4(sc->pipe_phy_grf, 0x8, 0xFFFF0101U);
+		SYSCON_WRITE_4(sc->pipe_phy_grf, 0xC, 0xFFFF0200U);
+		SYSCON_WRITE_4(sc->pipe_phy_grf, 0x4, 0x60004000U);
+
+		/* mmio PHYREG tuning (100MHz-reference values) */
+		val = bus_read_4(sc->mem, 0x7CU);
+		val = (val & ~0x30U) | 0x10U;
+		bus_write_4(sc->mem, 0x7CU, val);
+		bus_write_4(sc->mem, 0x74U, 0xC0U);
+		val = bus_read_4(sc->mem, 0x80U);
+		val = (val & ~0x1CU) | 0x8U;
+		bus_write_4(sc->mem, 0x80U, val);
+		bus_write_4(sc->mem, 0x6CU, 0x4CU);
+		bus_write_4(sc->mem, 0x28U, 0x90U);
+		bus_write_4(sc->mem, 0x2CU, 0x43U);
+		bus_write_4(sc->mem, 0x30U, 0x88U);
+		bus_write_4(sc->mem, 0x34U, 0x56U);
+		val = bus_read_4(sc->mem, 0x64U);
+		val |= (1U << 5);
+		bus_write_4(sc->mem, 0x64U, val);
+	}
+
 	if (hwreset_deassert(sc->phy_reset))
 		device_printf(dev, "phy_reset failed to clear\n");
 
@@ -397,6 +443,21 @@ rk3568_combphy_attach(device_t dev)
 		device_printf(dev, "getting ref failed\n");
 		return (ENXIO);
 	}
+	/*
+	 * PCIe needs the 100MHz reference.  The DTS assigns this rate to
+	 * CLK_PCIEPHY2_REF (assigned-clock-rates), but the FreeBSD PMUCRU
+	 * driver does not apply assigned-clock-rates, so the "ref" clock
+	 * resolves to 25MHz.  Upstream Linux has no PCIe tuning for the 25M
+	 * path, and with it the PHY cannot train the M.2 NVMe link (observed
+	 * 2026-08-29: combphy1 ref_clk=25000000, pcie2x1 downstream empty).
+	 * Request 100MHz explicitly for PCIe mode; the PMUCRU driver then
+	 * switches the PCIEPHY2_REF mux to the 100M divider path, matching
+	 * the working bare-metal (fdwpcie) configuration.
+	 */
+	if (sc->mode == PHY_TYPE_PCIE &&
+	    clk_set_freq(sc->ref_clk, 0, 100000000) != 0)
+		device_printf(dev,
+		    "failed to set PCIe ref clock to 100MHz\n");
 	if (clk_enable(sc->ref_clk))
 		device_printf(dev, "enable ref failed\n");
 	if (clk_get_by_ofw_name(dev, 0, "apb", &sc->apb_clk)) {

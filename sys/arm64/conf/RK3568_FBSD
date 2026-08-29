@@ -33,5 +33,10 @@ device		wlan_wep
 device		rtwn
 device		rtwn_usb
 
+# Intel Wireless 7260 on the PCIe x4 slot (8086:08b1).  The ucode is baked
+# into the kernel image because the ramdisk root carries no /boot/firmware.
+device		iwm
+device		iwm7260fw
+
 # Firmware assist module (loads rtwn-rtl8188eufw from /boot/firmware)
 device		firmware

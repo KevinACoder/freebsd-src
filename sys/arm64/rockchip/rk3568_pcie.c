@@ -237,11 +237,18 @@ rk3568_pcie_init_soc(device_t dev)
 		}
 	}
 
+	/*
+	 * Wait for the endpoint to finish its power-on firmware init before
+	 * pci_dw_init() runs the one-shot bus scan (FreeBSD does not rescan
+	 * or retry PERST at boot, so the settle window is the only lever).
+	 * U-Boot waits 1s after link up for the Intel 7260; the SM2263EN
+	 * NVMe needs several seconds (KI-008), and short settles made
+	 * enumeration flaky across boots (observed 2026-08-29).  Use 3s.
+	 */
+	DELAY(3000000);
+
 	if ((err = pci_dw_init(dev)))
 		return (ENXIO);
-
-	/* Delay to have things settle */
-	DELAY(100000);
 
 	/* Enable all MSG interrupts */
 	bus_write_4(sc->apb_res, PCIE_CLIENT_INTR_MASK_MSG_RX, 0x7fff0000);

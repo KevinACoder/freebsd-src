@@ -450,6 +450,20 @@
 	status = "okay";
 };
 
+/*
+ * PCIe 2.0 x1 M.2 22110 slot (SM2263EN NVMe).  PERST# on GPIO3_PC1,
+ * GPIO_ACTIVE_HIGH matches the Linux board DTB (assert = pin low).
+ * combphy2 is muxed to PCIe here (sata2 is disabled below); the dtsi
+ * ships pcie2x1 with status="disabled", so this override is what brings
+ * the second controller up.  The dtsi ranges already expose IO + 32-bit
+ * MEM + an aligned 64-bit MEM window, so 64-bit BARs land in the aligned
+ * direct-mapped window (no MCS9990-style misalignment).
+ */
+&pcie2x1 {
+	reset-gpios = <&gpio3 RK_PC1 GPIO_ACTIVE_HIGH>;
+	status = "okay";
+};
+
 &pinctrl {
 	pcie {
 		pcie_reset_pin: pcie-reset-pin {
