@@ -52,6 +52,7 @@
 
 #include <dev/clk/clk.h>
 #include <dev/hwreset/hwreset.h>
+#include <dev/fdt/fdt_pinctrl.h>
 #include <dev/regulator/regulator.h>
 #include <dev/syscon/syscon.h>
 
@@ -147,6 +148,13 @@ eqos_fdt_init(device_t dev)
 	phandle_t node = ofw_bus_get_node(dev);
 	hwreset_t eqos_reset;
 	regulator_t eqos_supply;
+
+	/* Configure the pins described by "pinctrl-0" ourselves: simplebus
+	 * does not do this automatically, and on RK3568 the gmac0 pins
+	 * (GPIO2 group) may still be muxed away by whatever ran before us
+	 * (2026-08-30: gmac0 dead until this, while gmac1 inherited its
+	 * mux from U-Boot's own probe). */
+	fdt_pinctrl_configure(dev, 0);
 	uint32_t rx_delay, tx_delay;
 	uint8_t buffer[16];
 	clk_t stmmaceth, mac_clk_rx, mac_clk_tx, aclk_mac, pclk_mac;
