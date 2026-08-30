@@ -13,6 +13,14 @@
 ident		RK3568_MFS
 include		"RK3568_FBSD"
 
+# USB webcam/mic lane (Logitech Pro 9000 UVC+UAC): snd_uaudio drives the
+# UAC microphone in-kernel (/dev/dspN), cuse(4) backs the userspace webcamd
+# (official aarch64 pkg binary baked into the mfsroot) that exports
+# /dev/videoN over the V4L2 API.  Static so the ramdisk needs no modules.
+device		sound
+device		snd_uaudio
+device		cuse
+
 # The embedfs_*.o rule depends on this file, so refreshing mfsroot.ufs and
 # rebuilding triggers exactly one embed recompile + relink.  Path is fixed;
 # keep it in sync with MFSRK3568_WORK_ROOT in scripts/build-mfsbsd-arm64.sh.
