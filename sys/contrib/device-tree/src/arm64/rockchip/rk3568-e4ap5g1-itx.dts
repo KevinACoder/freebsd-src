@@ -181,12 +181,26 @@
 /*
  * USB3 super-speed lanes are muxed to SATA on this board, so both dwc3
  * controllers are limited to USB 2.0 high speed.
+ *
+ * The snps quirk flags mirror the vendor Linux board DTS (the working
+ * ground truth, 2026-09-01 regdump): without dis_enblslpm /
+ * dis-u2-freeclk-exists / dis-tx-ipgap-linecheck / parkmode-disable-hs+ss
+ * / dis_rxdet_inp3 the FreeBSD dwc3 leaves GUCTL1/GUSB2PHYCFG/GUSB3PIPECTL
+ * at values that leave the xHCI ports unable to complete link training
+ * (KI-007/KI-012: devices never enumerate on either double-decker slot).
  */
 &usb_host0_xhci {
 	dr_mode = "host";
 	phys = <&usb2phy0_otg>;
 	phy-names = "usb2-phy";
 	maximum-speed = "high-speed";
+	snps,dis_enblslpm_quirk;
+	snps,dis-u2-freeclk-exists-quirk;
+	snps,dis-tx-ipgap-linecheck-quirk;
+	snps,parkmode-disable-hs-quirk;
+	snps,parkmode-disable-ss-quirk;
+	snps,dis_rxdet_inp3_quirk;
+	snps,dis-del-phy-power-chg-quirk;
 	status = "okay";
 };
 
@@ -194,6 +208,13 @@
 	phys = <&usb2phy0_host>;
 	phy-names = "usb2-phy";
 	maximum-speed = "high-speed";
+	snps,dis_enblslpm_quirk;
+	snps,dis-u2-freeclk-exists-quirk;
+	snps,dis-tx-ipgap-linecheck-quirk;
+	snps,parkmode-disable-hs-quirk;
+	snps,parkmode-disable-ss-quirk;
+	snps,dis_rxdet_inp3_quirk;
+	snps,dis-del-phy-power-chg-quirk;
 	status = "okay";
 };
 

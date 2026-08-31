@@ -54,6 +54,7 @@
 #include <dev/usb/usb_bus.h>
 #include <dev/usb/controller/generic_xhci.h>
 #include <dev/usb/controller/xhci.h>
+#include <dev/usb/controller/xhcireg.h>
 #include <dev/usb/controller/dwc3/dwc3.h>
 
 #ifdef FDT
@@ -85,10 +86,12 @@ struct snps_dwc3_softc {
 	uint32_t		snpsversion;
 	uint32_t		snpsrevision;
 	uint32_t		snpsversion_type;
+	bool			hs_only;
 #ifdef FDT
 	clk_t			clk_ref;
 	clk_t			clk_suspend;
 	clk_t			clk_bus;
+	clk_t			clk_pipe;
 #endif
 };
 
@@ -278,13 +281,12 @@ snps_dwc3_configure_host(struct snps_dwc3_softc *sc)
 	DWC3_WRITE(sc, DWC3_GCTL, reg);
 
 	/*
-	 * Enable the Host IN Auto Retry feature, making the
-	 * host respond with a non-terminating retry ACK.
-	 * XXX If we ever support more than host mode this needs a dr_mode check.
+	 * GUCTL is left untouched beyond the PRTCAPDIR write above: the
+	 * Linux working state on E4AP5G1-ITX has GUCTL = 0x02000010, i.e.
+	 * the (HW-default) REFCLKPER value with bit14 clear -- this driver
+	 * used to force "host auto retry" at bit14, a bit neither Linux nor
+	 * U-Boot set on this board (2026-09-01 regdump ground truth).
 	 */
-	reg = DWC3_READ(sc, DWC3_GUCTL);
-	reg |= DWC3_GUCTL_HOST_AUTO_RETRY;
-	DWC3_WRITE(sc, DWC3_GUCTL, reg);
 }
 
 #ifdef FDT
@@ -341,6 +343,10 @@ snps_dwc3_do_quirks(struct snps_dwc3_softc *sc)
 	reg = DWC3_READ(sc, DWC3_GUCTL1);
 	if (device_has_property(sc->dev, "snps,dis-tx-ipgap-linecheck-quirk"))
 		reg |= DWC3_GUCTL1_TX_IPGAP_LINECHECK_DIS;
+	if (device_has_property(sc->dev, "snps,parkmode-disable-hs-quirk"))
+		reg |= DWC3_GUCTL1_PARKMODE_DISABLE_HS;
+	if (device_has_property(sc->dev, "snps,parkmode-disable-ss-quirk"))
+		reg |= DWC3_GUCTL1_PARKMODE_DISABLE_SS;
 	DWC3_WRITE(sc, DWC3_GUCTL1, reg);
 
 	reg = DWC3_READ(sc, DWC3_GUSB3PIPECTL0);
@@ -361,6 +367,45 @@ snps_dwc3_do_quirks(struct snps_dwc3_softc *sc)
 		xsc->sc_quirks |= XHCI_QUIRK_DISABLE_PORT_PED;
 	}
 }
+
+#ifdef FDT
+/*
+ * Diagnostic dump of the DWC3 global registers plus the xHCI port
+ * status of every root-hub port.  Unconditional on purpose during the
+ * RK3568 double-decker slot bring-up (KI-007/KI-012); on a booti boot
+ * there is no loader to pass -v and /dev/mem reads outside the DMAP
+ * panic, so dmesg is the only register window.
+ */
+static void
+snps_dwc3_dump_regs(struct snps_dwc3_softc *sc, const char *msg)
+{
+	struct xhci_softc *xsc;
+	uint32_t reg;
+	int i;
+
+	device_printf(sc->dev, "regs(%s): GSNPSID=%#x GCTL=%#x GSTS=%#x "
+	    "GUCTL=%#x GUCTL1=%#x\n", msg,
+	    DWC3_READ(sc, DWC3_GSNPSID),
+	    DWC3_READ(sc, DWC3_GCTL),
+	    DWC3_READ(sc, DWC3_GSTS),
+	    DWC3_READ(sc, DWC3_GUCTL),
+	    DWC3_READ(sc, DWC3_GUCTL1));
+	device_printf(sc->dev, "regs(%s): GUSB2PHYCFG0=%#x GUSB3PIPECTL0=%#x "
+	    "GFLADJ=%#x GHWPARAMS0=%#x GHWPARAMS3=%#x\n", msg,
+	    DWC3_READ(sc, DWC3_GUSB2PHYCFG0),
+	    DWC3_READ(sc, DWC3_GUSB3PIPECTL0),
+	    DWC3_READ(sc, DWC3_GFLADJ),
+	    DWC3_READ(sc, DWC3_GHWPARAMS0),
+	    DWC3_READ(sc, DWC3_GHWPARAMS3));
+
+	xsc = &sc->sc;
+	for (i = 1; i <= xsc->sc_noport; i++) {
+		reg = XREAD4(xsc, oper, XHCI_PORTSC(i));
+		device_printf(sc->dev, "regs(%s): port %d PORTSC=%#x\n",
+		    msg, i, reg);
+	}
+}
+#endif
 
 static int
 snps_dwc3_probe_common(device_t dev)
@@ -402,6 +447,7 @@ snps_dwc3_common_attach(device_t dev, bool is_fdt)
 	sc->clk_ref = NULL;
 	sc->clk_suspend = NULL;
 	sc->clk_bus = NULL;
+	sc->clk_pipe = NULL;
 	rst = NULL;
 #endif
 
@@ -419,6 +465,25 @@ snps_dwc3_common_attach(device_t dev, bool is_fdt)
 	node = ofw_bus_get_node(dev);
 
 	/*
+	 * Record whether the board limits this controller to below
+	 * super-speed ("maximum-speed" = "high-speed"/"full-speed").  The
+	 * E4AP5G1-ITX double-decker USB3.0 slots have their SS lanes muxed
+	 * to SATA, so both DWC3s run USB2-only and need the 2.0 clock to be
+	 * used in place of the (absent) 3.0 clock, see GUCTL1 handling below.
+	 */
+	{
+		char max_speed[16];
+		ssize_t ns;
+
+		sc->hs_only = false;
+		ns = device_get_property(dev, "maximum-speed", max_speed,
+		    sizeof(max_speed), DEVICE_PROP_BUFFER);
+		if (ns > 0 && (strcmp(max_speed, "high-speed") == 0 ||
+		    strcmp(max_speed, "full-speed") == 0))
+			sc->hs_only = true;
+	}
+
+	/*
 	 * Bring up the clocks and release the CRU domain reset before the
 	 * first register access below: on parts nobody (e.g. U-Boot) has
 	 * initialized yet, reading GSNPSID with a dead bus clock is either
@@ -434,6 +499,19 @@ snps_dwc3_common_attach(device_t dev, bool is_fdt)
 			device_printf(dev, "Cannot get suspend_clk\n");
 		if (clk_get_by_ofw_name(dev, node, "bus_clk", &sc->clk_bus) != 0)
 			device_printf(dev, "Cannot get bus_clk\n");
+		/*
+		 * rk3568 additionally feeds the PIPE bus domain (PCLK_PIPE).
+		 * Linux's dwc3-of-simple glue enables it via clk_bulk; without
+		 * it the PIPE-domain logic the core still touches in USB2-only
+		 * mode can sit unclocked.  Optional: some board DTs omit it.
+		 */
+		if (ofw_bus_is_compatible(dev, "rockchip,rk3568-dwc3") == 1 &&
+		    clk_get_by_ofw_name(dev, node, "pipe_clk",
+		    &sc->clk_pipe) != 0) {
+			if (bootverbose)
+				device_printf(dev, "no pipe_clk in DT\n");
+			sc->clk_pipe = NULL;
+		}
 	}
 	if (is_fdt) {
 		if (sc->clk_ref != NULL)
@@ -442,6 +520,8 @@ snps_dwc3_common_attach(device_t dev, bool is_fdt)
 			(void)clk_enable(sc->clk_suspend);
 		if (sc->clk_bus != NULL)
 			(void)clk_enable(sc->clk_bus);
+		if (sc->clk_pipe != NULL)
+			(void)clk_enable(sc->clk_pipe);
 
 		if (hwreset_get_by_ofw_idx(dev, node, 0, &rst) == 0) {
 			(void)hwreset_assert(rst);
@@ -499,11 +579,24 @@ snps_dwc3_common_attach(device_t dev, bool is_fdt)
 			uint32_t hwparams3;
 
 			hwparams3 = DWC3_READ(sc, DWC3_GHWPARAMS3);
-			if (DWC3_HWPARAMS3_SSPHY(hwparams3) == DWC3_HWPARAMS3_SSPHY_DISABLE) {
+			/*
+			 * Force the 2.0 clock to substitute for the 3.0 clock
+			 * whenever there is no usable super-speed PHY: either
+			 * the SS PHY is fused off at synthesis (GHWPARAMS3), or
+			 * the board caps the controller at high/full speed via
+			 * "maximum-speed" (e.g. SS lanes muxed elsewhere).
+			 * Linux's dwc3_core_init() sets this bit on exactly the
+			 * latter condition; keying only on GHWPARAMS3 leaves
+			 * the xHCI ports stuck in Polling on RK3568 (KI-007/
+			 * KI-012) because the SS PHY is synthesized but never
+			 * wired up or clocked.
+			 */
+			if (sc->hs_only ||
+			    DWC3_HWPARAMS3_SSPHY(hwparams3) ==
+			    DWC3_HWPARAMS3_SSPHY_DISABLE) {
 				uint32_t reg1 = DWC3_READ(sc, DWC3_GUCTL1);
 
-				if (bootverbose)
-					device_printf(dev, "Forcing USB2 clock only\n");
+				device_printf(dev, "Forcing USB2 clock only\n");
 				reg1 |= DWC3_GUCTL1_DEV_FORCE_20_CLK_FOR_30_CLK;
 				DWC3_WRITE(sc, DWC3_GUCTL1, reg1);
 			}
@@ -524,6 +617,10 @@ skip_phys:
 #ifdef DWC3_DEBUG
 	snsp_dwc3_dump_regs(sc, "Post XHCI init");
 #endif
+#ifdef FDT
+	if (error == 0)
+		snps_dwc3_dump_regs(sc, "post-xhci");
+#endif
 
 #ifdef FDT
 	if (error) {
@@ -533,6 +630,8 @@ skip_phys:
 			clk_disable(sc->clk_suspend);
 		if (sc->clk_bus != NULL)
 			clk_disable(sc->clk_bus);
+		if (sc->clk_pipe != NULL)
+			clk_disable(sc->clk_pipe);
 	}
 #endif
 	return (error);

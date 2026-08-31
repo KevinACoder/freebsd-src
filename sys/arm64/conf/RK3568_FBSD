@@ -43,3 +43,10 @@ options		IWM_DEBUG
 
 # Firmware assist module (loads rtwn-rtl8188eufw from /boot/firmware)
 device		firmware
+
+# USB Ethernet for the double-decker USB3.0 slot bring-up (KI-007/KI-012):
+# the upper slot carries an RNDIS gadget NIC (urndis), with cdce as the
+# CDC-ECM/NCM fallback many such gadgets enumerate as.  uether/usb_ethernet
+# is pulled in automatically by the "optional ... | urndis" compile rule.
+device		urndis
+device		cdce
