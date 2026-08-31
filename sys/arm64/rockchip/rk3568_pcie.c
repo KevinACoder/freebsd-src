@@ -247,18 +247,6 @@ rk3568_pcie_init_soc(device_t dev)
 	 */
 	DELAY(3000000);
 
-	if ((err = pci_dw_init(dev)))
-		return (ENXIO);
-
-	/* Enable all MSG interrupts */
-	bus_write_4(sc->apb_res, PCIE_CLIENT_INTR_MASK_MSG_RX, 0x7fff0000);
-
-	/* Enable all Legacy interrupts */
-	bus_write_4(sc->apb_res, PCIE_CLIENT_INTR_MASK_LEGACY, 0x00ff0000);
-
-	/* Enable all Error interrupts */
-	bus_write_4(sc->apb_res, PCIE_CLIENT_INTR_MASK_ERR, 0x0fff0000);
-
 	return (0);
 }
 
@@ -425,6 +413,52 @@ rk3568_pcie_attach(device_t dev)
 
 	if ((error = rk3568_pcie_init_soc(dev)))
 		goto fail;
+
+	if ((error = pci_dw_init(dev)))
+		goto fail;
+
+	/*
+	 * Link-up alone does not mean the endpoint answers config TLPs yet
+	 * (SM2263EN needs seconds after PERST# release; KI-008).  The bus
+	 * scan is one-shot at bus_attach_children(), so poll the downstream
+	 * vendor ID (type-0 CFG via iATU region 0, bus = sub_bus) until it
+	 * responds, and dump the link state for evidence either way.
+	 */
+	{
+		struct pci_dw_softc *dws;
+		uint32_t ltssm, dbi_lnkst;
+		uint16_t vid;
+		int tries;
+
+		dws = &sc->dw_sc;
+		for (tries = 0; tries < 100; tries++) {
+			vid = (uint16_t)PCIB_READ_CONFIG(dev, dws->sub_bus, 0,
+			    0, PCIR_VENDOR, 2);
+			if (vid != 0xffff)
+				break;
+			DELAY(100000);
+		}
+		ltssm = bus_read_4(sc->apb_res, PCIE_CLIENT_LTSSM_STATUS);
+		dbi_lnkst = bus_read_4(sc->dw_sc.dbi_res, 0x80);
+		device_printf(dev,
+		    "downstream poll: vid=%#04x did=%#04x after %d ms; "
+		    "LTSSM_STATUS=%#010x smlh_state=%#x DBI_LNKSTA=%#010x\n",
+		    vid,
+		    (uint16_t)PCIB_READ_CONFIG(dev, dws->sub_bus, 0, 0,
+		    PCIR_DEVICE, 2), tries * 100, ltssm,
+		    ltssm & SMLH_LTSSM_STATE_MASK, dbi_lnkst);
+
+		/* Enable all MSG interrupts */
+		bus_write_4(sc->apb_res, PCIE_CLIENT_INTR_MASK_MSG_RX,
+		    0x7fff0000);
+
+		/* Enable all Legacy interrupts */
+		bus_write_4(sc->apb_res, PCIE_CLIENT_INTR_MASK_LEGACY,
+		    0x00ff0000);
+
+		/* Enable all Error interrupts */
+		bus_write_4(sc->apb_res, PCIE_CLIENT_INTR_MASK_ERR, 0x0fff0000);
+	}
 
 	/* Enable interrupt */
 	if ((bus_setup_intr(dev, sc->irq_res, INTR_TYPE_MISC | INTR_MPSAFE,
